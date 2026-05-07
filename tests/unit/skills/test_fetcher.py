@@ -3,6 +3,7 @@
 import asyncio
 import shutil
 import tempfile
+from datetime import UTC
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -14,7 +15,9 @@ from forge.skills.fetcher import (
     clone_context,
     clone_skill_package,
     resolve_ref_sha,
+    should_fetch_entry,
 )
+from forge.skills.models import LockEntry, LockFile, SkillEntry
 
 REPO_URL = "https://github.com/example/skills.git"
 BRANCH_SHA = "abc123def456abc123def456abc123def456abc1"
@@ -461,3 +464,141 @@ class TestCloneContext:
         ):
             async with clone_context(REPO_URL, "main"):
                 pass  # pragma: no cover
+
+
+# ---------------------------------------------------------------------------
+# should_fetch_entry – change detection
+# ---------------------------------------------------------------------------
+
+LOCK_SHA = "1111111111111111111111111111111111111111"
+NEW_SHA = "2222222222222222222222222222222222222222"
+COMMIT_SHA_REF = "aaaa111122223333444455556666777788889999"
+
+
+def _make_skill_entry(source: str = REPO_URL, ref: str | None = "main") -> SkillEntry:
+    """Return a minimal SkillEntry for testing."""
+    return SkillEntry(source=source, ref=ref, path="skills/")
+
+
+def _make_lock_entry(source: str = REPO_URL, resolved_commit: str = LOCK_SHA) -> LockEntry:
+    """Return a minimal LockEntry for testing."""
+    from datetime import datetime
+
+    return LockEntry(
+        source=source,
+        ref="main",
+        resolved_commit=resolved_commit,
+        mode="path",
+        path="skills/",
+        target="workspace",
+        skills=["my-skill"],
+        fetched_at=datetime.now(tz=UTC),
+    )
+
+
+def _make_lock(*entries: LockEntry) -> LockFile:
+    """Return a LockFile containing the given entries."""
+    return LockFile(packages=list(entries))
+
+
+class TestShouldFetchEntry:
+    # ------------------------------------------------------------------
+    # No lock entry present
+    # ------------------------------------------------------------------
+
+    def test_returns_true_when_no_lock_entry(self):
+        """Returns True when the lock file has no entry for the source URL."""
+        entry = _make_skill_entry()
+        lock = _make_lock()  # empty
+
+        assert should_fetch_entry(entry, resolved_sha=NEW_SHA, lock=lock) is True
+
+    def test_returns_true_when_different_source_in_lock(self):
+        """Returns True when the lock only contains entries for other sources."""
+        entry = _make_skill_entry(source=REPO_URL)
+        other_lock_entry = _make_lock_entry(source="https://github.com/other/repo.git")
+        lock = _make_lock(other_lock_entry)
+
+        assert should_fetch_entry(entry, resolved_sha=NEW_SHA, lock=lock) is True
+
+    # ------------------------------------------------------------------
+    # resolved_sha is not None (branch / tag refs)
+    # ------------------------------------------------------------------
+
+    def test_returns_false_when_resolved_sha_matches_lock(self):
+        """Returns False when resolved_sha equals the lock entry's resolved_commit."""
+        entry = _make_skill_entry()
+        lock_entry = _make_lock_entry(resolved_commit=LOCK_SHA)
+        lock = _make_lock(lock_entry)
+
+        assert should_fetch_entry(entry, resolved_sha=LOCK_SHA, lock=lock) is False
+
+    def test_returns_true_when_resolved_sha_differs_from_lock(self):
+        """Returns True when resolved_sha differs from the lock entry's resolved_commit."""
+        entry = _make_skill_entry()
+        lock_entry = _make_lock_entry(resolved_commit=LOCK_SHA)
+        lock = _make_lock(lock_entry)
+
+        assert should_fetch_entry(entry, resolved_sha=NEW_SHA, lock=lock) is True
+
+    # ------------------------------------------------------------------
+    # resolved_sha is None (commit SHA refs)
+    # ------------------------------------------------------------------
+
+    def test_returns_false_when_commit_sha_ref_matches_lock(self):
+        """Returns False when entry.ref (commit SHA) matches the lock's resolved_commit."""
+        entry = _make_skill_entry(ref=COMMIT_SHA_REF)
+        lock_entry = _make_lock_entry(resolved_commit=COMMIT_SHA_REF)
+        lock = _make_lock(lock_entry)
+
+        assert should_fetch_entry(entry, resolved_sha=None, lock=lock) is False
+
+    def test_returns_true_when_commit_sha_ref_differs_from_lock(self):
+        """Returns True when entry.ref (commit SHA) differs from the lock's resolved_commit."""
+        entry = _make_skill_entry(ref=COMMIT_SHA_REF)
+        lock_entry = _make_lock_entry(resolved_commit=LOCK_SHA)
+        lock = _make_lock(lock_entry)
+
+        assert should_fetch_entry(entry, resolved_sha=None, lock=lock) is True
+
+    # ------------------------------------------------------------------
+    # Logging behaviour
+    # ------------------------------------------------------------------
+
+    def test_logs_when_no_lock_entry(self, caplog):
+        """Logs a debug message when no lock entry is found."""
+        import logging
+
+        entry = _make_skill_entry()
+        lock = _make_lock()
+
+        with caplog.at_level(logging.DEBUG, logger="forge.skills.fetcher"):
+            should_fetch_entry(entry, resolved_sha=NEW_SHA, lock=lock)
+
+        assert any("fetch required" in record.message for record in caplog.records)
+
+    def test_logs_when_skill_is_stale(self, caplog):
+        """Logs a debug message when the skill SHA has changed."""
+        import logging
+
+        entry = _make_skill_entry()
+        lock_entry = _make_lock_entry(resolved_commit=LOCK_SHA)
+        lock = _make_lock(lock_entry)
+
+        with caplog.at_level(logging.DEBUG, logger="forge.skills.fetcher"):
+            should_fetch_entry(entry, resolved_sha=NEW_SHA, lock=lock)
+
+        assert any("stale" in record.message for record in caplog.records)
+
+    def test_logs_when_skill_is_current(self, caplog):
+        """Logs a debug message when the skill is already up-to-date."""
+        import logging
+
+        entry = _make_skill_entry()
+        lock_entry = _make_lock_entry(resolved_commit=LOCK_SHA)
+        lock = _make_lock(lock_entry)
+
+        with caplog.at_level(logging.DEBUG, logger="forge.skills.fetcher"):
+            should_fetch_entry(entry, resolved_sha=LOCK_SHA, lock=lock)
+
+        assert any("current" in record.message for record in caplog.records)

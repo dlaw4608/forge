@@ -8,6 +8,9 @@ Provides :func:`clone_skill_package` to clone a repository into a temporary
 directory, using a shallow clone for speed and falling back to a full clone
 when the ref is a commit SHA or when the shallow clone fails.  The
 :func:`clone_context` context manager wraps the clone and guarantees cleanup.
+
+Provides :func:`should_fetch_entry` to compare a resolved SHA against the
+current lock file and determine whether a re-fetch is needed.
 """
 
 import asyncio
@@ -17,6 +20,8 @@ import tempfile
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
+
+from forge.skills.models import LockFile, SkillEntry
 
 logger = logging.getLogger(__name__)
 
@@ -294,3 +299,64 @@ async def clone_context(
     finally:
         shutil.rmtree(cloned_path, ignore_errors=True)
         logger.debug("Removed temp directory %s", cloned_path)
+
+
+# ---------------------------------------------------------------------------
+# Change detection
+# ---------------------------------------------------------------------------
+
+
+def should_fetch_entry(
+    entry: SkillEntry,
+    resolved_sha: str | None,
+    lock: LockFile,
+) -> bool:
+    """Determine whether a skill entry needs to be fetched (or re-fetched).
+
+    Compares the resolved SHA for *entry* against the ``resolved_commit`` stored
+    in *lock*.  The comparison strategy depends on whether *resolved_sha* is
+    available:
+
+    * **resolved_sha is not None** – the ref was resolved via ``git ls-remote``
+      (branch or tag).  Compare *resolved_sha* against the lock entry's
+      ``resolved_commit``.
+
+    * **resolved_sha is None** – the ref is assumed to already be a commit SHA
+      (``git ls-remote`` returned empty output).  Compare ``entry.ref`` directly
+      against the lock entry's ``resolved_commit``.
+
+    Args:
+        entry: The skill configuration entry whose source URL is used for the
+            lock file lookup.
+        resolved_sha: The SHA returned by :func:`resolve_ref_sha`, or ``None``
+            when the entry's ref is itself a commit SHA.
+        lock: The current lock file to search for an existing entry.
+
+    Returns:
+        ``True`` when the entry should be fetched (no lock entry exists or the
+        SHA has changed), ``False`` when the lock entry is already up-to-date.
+    """
+    lock_entry = lock.find_by_source(entry.source)
+
+    if lock_entry is None:
+        logger.debug("No lock entry found for %s – fetch required", entry.source)
+        return True
+
+    # Determine which SHA to compare against the lock.
+    current_sha = resolved_sha if resolved_sha is not None else entry.ref
+
+    if current_sha != lock_entry.resolved_commit:
+        logger.debug(
+            "Skill %s is stale: lock has %s, current is %s – fetch required",
+            entry.source,
+            lock_entry.resolved_commit,
+            current_sha,
+        )
+        return True
+
+    logger.debug(
+        "Skill %s is current at %s – no fetch needed",
+        entry.source,
+        lock_entry.resolved_commit,
+    )
+    return False
