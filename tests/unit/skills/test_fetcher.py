@@ -1,11 +1,20 @@
-"""Unit tests for forge.skills.fetcher – resolve_ref_sha."""
+"""Unit tests for forge.skills.fetcher – resolve_ref_sha and clone helpers."""
 
 import asyncio
+import shutil
+import tempfile
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from forge.skills.fetcher import RefResolutionError, resolve_ref_sha
+from forge.skills.fetcher import (
+    CloneError,
+    RefResolutionError,
+    clone_context,
+    clone_skill_package,
+    resolve_ref_sha,
+)
 
 REPO_URL = "https://github.com/example/skills.git"
 BRANCH_SHA = "abc123def456abc123def456abc123def456abc1"
@@ -179,3 +188,276 @@ class TestResolveRefShaErrors:
 
         with _patch_exec(process), pytest.raises(RefResolutionError, match="unable to connect"):
             await resolve_ref_sha(REPO_URL, "main")
+
+
+# ---------------------------------------------------------------------------
+# clone_skill_package helpers
+# ---------------------------------------------------------------------------
+
+COMMIT_SHA = "a" * 40  # looks like a full commit SHA
+
+
+def _make_git_process(returncode: int = 0, stderr: bytes = b"") -> MagicMock:
+    """Return a mock asyncio subprocess for a git clone/checkout command."""
+    process = MagicMock()
+    process.returncode = returncode
+    process.communicate = AsyncMock(return_value=(b"", stderr))
+    process.kill = MagicMock()
+    return process
+
+
+def _patch_git_exec(side_effects: list) -> patch:
+    """Patch asyncio.create_subprocess_exec to return processes in order."""
+    return patch(
+        "asyncio.create_subprocess_exec",
+        new=AsyncMock(side_effect=side_effects),
+    )
+
+
+# ---------------------------------------------------------------------------
+# clone_skill_package – success paths
+# ---------------------------------------------------------------------------
+
+
+class TestCloneSkillPackageSuccess:
+    @pytest.mark.asyncio
+    async def test_shallow_clone_branch_succeeds(self, tmp_path):
+        """Shallow clone is used for branch refs and the cloned path is returned."""
+        process = _make_git_process(returncode=0)
+
+        with (
+            patch("tempfile.mkdtemp", return_value=str(tmp_path)),
+            _patch_git_exec([process]) as mock_exec,
+        ):
+            result = await clone_skill_package(REPO_URL, "main")
+
+        assert result == tmp_path
+        mock_exec.assert_called_once_with(
+            "git",
+            "clone",
+            "--depth",
+            "1",
+            "--branch",
+            "main",
+            REPO_URL,
+            str(tmp_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+    @pytest.mark.asyncio
+    async def test_shallow_clone_tag_succeeds(self, tmp_path):
+        """Shallow clone is used for tag refs."""
+        process = _make_git_process(returncode=0)
+
+        with (
+            patch("tempfile.mkdtemp", return_value=str(tmp_path)),
+            _patch_git_exec([process]) as mock_exec,
+        ):
+            result = await clone_skill_package(REPO_URL, "v1.2.3")
+
+        assert result == tmp_path
+        # First (and only) call must be a shallow clone with --branch v1.2.3
+        args = mock_exec.call_args_list[0].args
+        assert "--depth" in args
+        assert "v1.2.3" in args
+
+    @pytest.mark.asyncio
+    async def test_full_clone_for_commit_sha(self, tmp_path):
+        """Full clone + checkout is used when ref looks like a commit SHA."""
+        clone_process = _make_git_process(returncode=0)
+        checkout_process = _make_git_process(returncode=0)
+
+        with (
+            patch("tempfile.mkdtemp", return_value=str(tmp_path)),
+            _patch_git_exec([clone_process, checkout_process]) as mock_exec,
+        ):
+            result = await clone_skill_package(REPO_URL, COMMIT_SHA)
+
+        assert result == tmp_path
+        # Two git calls: clone then checkout; no shallow clone
+        assert mock_exec.call_count == 2
+        first_args = mock_exec.call_args_list[0].args
+        assert "--depth" not in first_args
+        second_args = mock_exec.call_args_list[1].args
+        assert "checkout" in second_args
+        assert COMMIT_SHA in second_args
+
+    @pytest.mark.asyncio
+    async def test_full_clone_no_ref(self, tmp_path):
+        """Full clone without checkout is used when ref is None."""
+        clone_process = _make_git_process(returncode=0)
+
+        with (
+            patch("tempfile.mkdtemp", return_value=str(tmp_path)),
+            _patch_git_exec([clone_process]) as mock_exec,
+        ):
+            result = await clone_skill_package(REPO_URL, None)
+
+        assert result == tmp_path
+        assert mock_exec.call_count == 1  # no checkout call
+        args = mock_exec.call_args_list[0].args
+        assert "--depth" not in args
+        assert "clone" in args
+
+    @pytest.mark.asyncio
+    async def test_fallback_to_full_clone_on_shallow_failure(self, tmp_path):
+        """When shallow clone fails, a full clone + checkout is attempted."""
+        shallow_fail = _make_git_process(returncode=128, stderr=b"error: Remote branch not found")
+        full_clone = _make_git_process(returncode=0)
+        checkout = _make_git_process(returncode=0)
+
+        with (
+            patch("tempfile.mkdtemp", return_value=str(tmp_path)),
+            patch("shutil.rmtree"),  # avoid FS side-effects in the test
+            _patch_git_exec([shallow_fail, full_clone, checkout]) as mock_exec,
+        ):
+            result = await clone_skill_package(REPO_URL, "some-branch")
+
+        assert result == tmp_path
+        assert mock_exec.call_count == 3  # shallow attempt + full clone + checkout
+
+    @pytest.mark.asyncio
+    async def test_returns_path_object(self, tmp_path):
+        """clone_skill_package always returns a pathlib.Path."""
+        process = _make_git_process(returncode=0)
+
+        with (
+            patch("tempfile.mkdtemp", return_value=str(tmp_path)),
+            _patch_git_exec([process]),
+        ):
+            result = await clone_skill_package(REPO_URL, "main")
+
+        assert isinstance(result, Path)
+
+    @pytest.mark.asyncio
+    async def test_temp_dir_in_system_temp(self):
+        """mkdtemp is called without a specific dir (uses system temp)."""
+        process = _make_git_process(returncode=0)
+        system_temp = tempfile.gettempdir()
+
+        with (
+            patch("forge.skills.fetcher.tempfile.mkdtemp", wraps=tempfile.mkdtemp) as mock_mkdtemp,
+            _patch_git_exec([process]),
+        ):
+            result = await clone_skill_package(REPO_URL, "main")
+
+        mock_mkdtemp.assert_called_once_with()
+        # The created directory should be under the system temp location.
+        assert str(result).startswith(system_temp)
+
+        # Clean up the real directory created during this test.
+        shutil.rmtree(result, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# clone_skill_package – error paths
+# ---------------------------------------------------------------------------
+
+
+class TestCloneSkillPackageErrors:
+    @pytest.mark.asyncio
+    async def test_clone_failure_raises_clone_error(self, tmp_path):
+        """CloneError is raised when git clone exits with a non-zero code."""
+        fail_process = _make_git_process(returncode=128, stderr=b"fatal: repo not found")
+
+        with (
+            patch("tempfile.mkdtemp", return_value=str(tmp_path)),
+            patch("shutil.rmtree"),
+            _patch_git_exec([fail_process, fail_process]),  # shallow + full both fail
+            pytest.raises(CloneError, match="git clone failed"),
+        ):
+            await clone_skill_package(REPO_URL, "main")
+
+    @pytest.mark.asyncio
+    async def test_checkout_failure_raises_clone_error(self, tmp_path):
+        """CloneError is raised when git checkout fails after a successful clone."""
+        clone_ok = _make_git_process(returncode=0)
+        checkout_fail = _make_git_process(returncode=1, stderr=b"error: pathspec 'bad-ref'")
+
+        with (
+            patch("tempfile.mkdtemp", return_value=str(tmp_path)),
+            patch("shutil.rmtree"),
+            _patch_git_exec([clone_ok, checkout_fail]),
+            pytest.raises(CloneError, match="git checkout"),
+        ):
+            await clone_skill_package(REPO_URL, COMMIT_SHA)
+
+    @pytest.mark.asyncio
+    async def test_os_error_raises_clone_error(self, tmp_path):
+        """OSError when spawning git raises CloneError."""
+        with (
+            patch("tempfile.mkdtemp", return_value=str(tmp_path)),
+            patch("shutil.rmtree"),
+            patch("asyncio.create_subprocess_exec", side_effect=OSError("git not found")),
+            pytest.raises(CloneError, match="Failed to start git"),
+        ):
+            await clone_skill_package(REPO_URL, "main")
+
+    @pytest.mark.asyncio
+    async def test_temp_dir_cleaned_up_on_error(self, tmp_path):
+        """Temporary directory is removed when cloning raises an error."""
+        fail_process = _make_git_process(returncode=128, stderr=b"fatal: not found")
+
+        with (
+            patch("tempfile.mkdtemp", return_value=str(tmp_path)),
+            patch("shutil.rmtree") as mock_rmtree,
+            _patch_git_exec([fail_process, fail_process]),
+            pytest.raises(CloneError),
+        ):
+            await clone_skill_package(REPO_URL, "main")
+
+        mock_rmtree.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# clone_context – context manager
+# ---------------------------------------------------------------------------
+
+
+class TestCloneContext:
+    @pytest.mark.asyncio
+    async def test_yields_path_and_cleans_up_on_success(self, tmp_path):
+        """clone_context yields the cloned path and removes it afterwards."""
+        process = _make_git_process(returncode=0)
+
+        with (
+            patch("tempfile.mkdtemp", return_value=str(tmp_path)),
+            _patch_git_exec([process]),
+            patch("shutil.rmtree") as mock_rmtree,
+        ):
+            async with clone_context(REPO_URL, "main") as repo:
+                yielded = repo
+
+        assert yielded == tmp_path
+        mock_rmtree.assert_called_once_with(tmp_path, ignore_errors=True)
+
+    @pytest.mark.asyncio
+    async def test_cleans_up_on_exception_inside_block(self, tmp_path):
+        """clone_context removes the directory even when the body raises."""
+        process = _make_git_process(returncode=0)
+
+        with (
+            patch("tempfile.mkdtemp", return_value=str(tmp_path)),
+            _patch_git_exec([process]),
+            patch("shutil.rmtree") as mock_rmtree,
+            pytest.raises(RuntimeError, match="boom"),
+        ):
+            async with clone_context(REPO_URL, "main"):
+                raise RuntimeError("boom")
+
+        mock_rmtree.assert_called_once_with(tmp_path, ignore_errors=True)
+
+    @pytest.mark.asyncio
+    async def test_clone_error_propagates(self, tmp_path):
+        """CloneError raised during cloning propagates out of the context manager."""
+        fail_process = _make_git_process(returncode=128, stderr=b"fatal: not found")
+
+        with (
+            patch("tempfile.mkdtemp", return_value=str(tmp_path)),
+            patch("shutil.rmtree"),
+            _patch_git_exec([fail_process, fail_process]),
+            pytest.raises(CloneError),
+        ):
+            async with clone_context(REPO_URL, "main"):
+                pass  # pragma: no cover
