@@ -33,7 +33,6 @@ from forge.skills.cli_handlers import (
 from forge.skills.lock import read_lock_file, update_lock_file
 from forge.skills.models import LockEntry
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -178,7 +177,6 @@ class TestTS017InstallFromGitUrl:
         self,
         tmp_path: Path,
         local_git_repo: Path,
-        capsys,
     ):
         """Installing from a Git URL creates skills/<project>/<skill-name>/ dirs."""
         git_url = local_git_repo.as_uri()
