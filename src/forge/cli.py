@@ -471,30 +471,23 @@ async def cmd_logs(args: argparse.Namespace) -> int:
 
 async def cmd_skills_install(args: argparse.Namespace) -> int:
     """Install a skill from a Git URL or local path."""
-    # Validation: exactly one of --project or --default must be provided
-    if not args.project and not args.default:
-        print(
-            "Error: exactly one of --project or --default must be provided",
-            file=sys.stderr,
-        )
-        return 2
-    if args.project and args.default:
-        print(
-            "Error: --project and --default are mutually exclusive; provide exactly one",
-            file=sys.stderr,
-        )
-        return 2
-    return 0
+    from forge.skills.cli_handlers import cmd_skills_install as _handler
+
+    return await _handler(args)
 
 
 async def cmd_skills_list(_args: argparse.Namespace) -> int:
     """List installed skills."""
-    return 0
+    from forge.skills.cli_handlers import cmd_skills_list as _handler
+
+    return await _handler(_args)
 
 
 async def cmd_skills_update(_args: argparse.Namespace) -> int:
     """Update installed skills."""
-    return 0
+    from forge.skills.cli_handlers import cmd_skills_update as _handler
+
+    return await _handler(_args)
 
 
 async def cmd_health(_args: argparse.Namespace) -> int:
