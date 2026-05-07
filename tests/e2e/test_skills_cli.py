@@ -378,9 +378,7 @@ class TestTS018InstallFromLocalPath:
         project_dir.mkdir()
 
         with patch("forge.skills.cli_handlers.Path.cwd", return_value=project_dir):
-            result = await cmd_skills_install(
-                _install_args(source=str(source_dir), default=True)
-            )
+            result = await cmd_skills_install(_install_args(source=str(source_dir), default=True))
 
         assert result == 0
         assert (project_dir / "skills" / "default" / "my-skill").is_dir()
@@ -396,9 +394,7 @@ class TestTS018InstallFromLocalPath:
         project_dir.mkdir()
 
         with patch("forge.skills.cli_handlers.Path.cwd", return_value=project_dir):
-            result = await cmd_skills_install(
-                _install_args(source=str(missing), project="LOCAL")
-            )
+            result = await cmd_skills_install(_install_args(source=str(missing), project="LOCAL"))
 
         assert result == 1
         err = capsys.readouterr().err
