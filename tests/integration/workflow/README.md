@@ -51,6 +51,52 @@ uv run pytest tests/integration/workflow/test_pr_ci_status_updates.py -v
 - Mock helpers: `create_mock_jira_client()`, `create_mock_container_runner()`, `create_mock_github_client()`
 - State creation via `create_initial_feature_state()` from `forge.workflow.feature.state`
 
+### test_ai_review_status_integration.py
+
+Integration tests for AI review status comment posting.
+
+**Purpose**: Verify that Jira status comments are posted correctly when the ai_review node is entered after CI passes.
+
+**Test Scenarios**:
+
+1. **TS-012: AI review start posts comment to feature ticket**
+   - `test_ai_review_posts_comment_with_pr_number`: Verifies "🤖 CI checks passed. Running AI code review on PR #456." is posted
+   - `test_ai_review_posts_comment_with_different_pr_numbers`: Verifies PR number matches workflow state (tests PR #1, #9999)
+   - `test_ai_review_posts_to_feature_ticket`: Verifies comment posts to feature ticket (ticket_key)
+   - `test_ai_review_jira_client_properly_closed`: Verifies JiraClient properly closed after operations
+
+2. **Fallback comment when PR number unavailable**
+   - `test_ai_review_posts_fallback_comment_without_pr_number`: Verifies "🤖 CI checks passed. Running AI code review." when PR number is None
+   - `test_ai_review_posts_fallback_when_pr_number_missing_from_state`: Verifies fallback when key missing from state
+
+3. **Error Handling**
+   - `test_workflow_continues_when_comment_posting_fails`: Verifies workflow continues when comment posting fails
+   - `test_workflow_continues_when_jira_client_creation_fails`: Verifies behavior when JiraClient creation fails
+   - `test_jira_client_closed_even_on_comment_failure`: Verifies JiraClient cleanup even on errors
+
+4. **Conditional Execution**
+   - `test_comment_posts_when_ai_review_node_entered`: Verifies comment posts when node is entered after CI passes
+   - `test_no_duplicate_comments_on_node_re_entry`: Verifies behavior on hypothetical node re-entry
+
+5. **State Preservation**
+   - `test_ai_review_preserves_state_fields`: Verifies all state fields preserved except those updated by the node
+   - `test_ai_review_sets_ai_review_status`: Verifies ai_review_status set to 'completed'
+
+**Running the tests**:
+```bash
+uv run pytest tests/integration/workflow/test_ai_review_status_integration.py -v
+```
+
+**Mock Strategy**:
+- JiraClient is mocked to avoid external API calls
+- Tests verify exact comment text matches specification
+- Tests verify workflow continues despite Jira failures (error suppression)
+- Tests verify state preservation and updates
+
+**Test Fixtures**:
+- Mock helper: `create_mock_jira_client()`
+- State creation via `create_initial_feature_state()` from `forge.workflow.feature.state`
+
 ## Related Tests
 
 These integration tests complement:
@@ -58,3 +104,5 @@ These integration tests complement:
 - `/tests/integration/orchestrator/test_ci_fix_attempt_status_comments.py` - Original CI attempt tests
 - `/tests/unit/workflow/test_pr_status_comments.py` - Unit tests for PR status comment logic
 - `/tests/unit/workflow/nodes/test_ci_attempt_tracking.py` - Unit tests for CI attempt tracking
+- `/tests/unit/workflow/test_ai_review_status.py` - Unit tests for AI review status comment logic
+- `/tests/unit/workflow/nodes/test_ai_review_status_comment.py` - Unit tests for AI review status instrumentation
