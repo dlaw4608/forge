@@ -16,6 +16,7 @@ from forge.workflow.feature.state import FeatureState as WorkflowState
 from forge.workflow.nodes.code_review import run_post_change_review, sync_pr_description
 from forge.workflow.nodes.workspace_setup import prepare_workspace
 from forge.workflow.utils import update_state_timestamp
+from forge.workflow.utils.jira_status import post_status_comment
 
 logger = logging.getLogger(__name__)
 
@@ -266,6 +267,23 @@ async def attempt_ci_fix(state: WorkflowState) -> WorkflowState:
         )
 
     logger.info(f"Attempting CI fix for {ticket_key}")
+
+    # Post status comment to feature ticket at start of CI fix attempt
+    current_attempt = state.get("current_attempt")
+    max_attempts = state.get("max_attempts")
+    
+    if current_attempt is not None and max_attempts is not None:
+        jira = JiraClient()
+        try:
+            message = f"🔧 CI checks failed. Analyzing failure and attempting fix ({current_attempt}/{max_attempts})."
+            await post_status_comment(jira, ticket_key, message)
+        finally:
+            await jira.close()
+    else:
+        logger.error(
+            f"CI fix attempt values unavailable for {ticket_key}: "
+            f"current_attempt={current_attempt}, max_attempts={max_attempts}"
+        )
 
     settings = get_settings()
     fork_owner = state.get("fork_owner", "")

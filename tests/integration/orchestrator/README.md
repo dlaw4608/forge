@@ -84,6 +84,85 @@ uv run pytest tests/integration/orchestrator/test_local_review_status_comments.p
 - Tests verify pass_number tracking across iterations
 - Tests verify workflow continues despite Jira failures (error suppression)
 
+### test_pr_creation_status_comments.py
+
+Integration tests for PR creation status comments.
+
+**Purpose**: Verify that Jira status comments are posted correctly when PRs are created, including label transitions from forge:implementing to forge:ci-pending.
+
+**Test Scenarios**:
+
+1. **TS-006: PR creation posts comment with PR number and updates labels**
+   - `test_pr_creation_posts_comment_with_pr_number`: Verifies "🚀 Pull request #{pr_number} created and submitted. Waiting for CI checks to complete." is posted
+   - `test_pr_creation_removes_implementing_label`: Verifies forge:implementing label removed from feature ticket
+   - `test_pr_creation_adds_ci_pending_label`: Verifies forge:ci-pending label added to feature ticket
+   - `test_pr_creation_jira_client_closed`: Verifies JiraClient properly closed after operations
+
+2. **TS-014: Comment uses fallback text when PR number unavailable**
+   - `test_pr_creation_posts_comment_without_pr_number`: Verifies fallback comment "🚀 Pull request created and submitted. Waiting for CI checks to complete." when PR number is None
+   - `test_pr_creation_labels_updated_without_pr_number`: Verifies label transitions work even without PR number
+
+3. **Error Handling**
+   - `test_workflow_continues_when_comment_posting_fails`: Verifies workflow continues when status comment posting fails
+   - `test_workflow_continues_when_label_removal_fails`: Verifies workflow continues when label removal fails
+   - `test_workflow_continues_when_label_setting_fails`: Verifies workflow continues when label setting fails
+   - `test_jira_client_closed_even_on_error`: Verifies JiraClient closed even when operations fail
+
+4. **CI Fix Re-entry**
+   - `test_ci_fix_reentry_no_comment_posted`: Verifies no comment posted when re-entering after CI fix
+   - `test_ci_fix_reentry_multiple_attempts_no_comment`: Verifies no comment posted for multiple CI fix re-entries
+
+**Running the tests**:
+```bash
+uv run pytest tests/integration/orchestrator/test_pr_creation_status_comments.py -v
+```
+
+**Mock Strategy**:
+- JiraClient is mocked to avoid external API calls
+- Tests verify exact comment text matches specification
+- Tests verify label transitions occur correctly
+- Tests verify workflow continues despite Jira failures (error suppression)
+
+### test_ci_fix_attempt_status_comments.py
+
+Integration tests for CI fix attempt status comments (TS-007).
+
+**Purpose**: Verify that Jira status comments are posted correctly at the start of each CI fix attempt, displaying current attempt and max attempts.
+
+**Test Scenarios**:
+
+1. **TS-007: CI fix attempts post comments with correct counts**
+   - `test_first_attempt_posts_comment_with_1_of_max`: Verifies first attempt posts "🔧 CI checks failed. Analyzing failure and attempting fix (1/{max_attempts})."
+   - `test_second_attempt_posts_comment_with_2_of_max`: Verifies second attempt posts correct count (2/{max_attempts})
+   - `test_final_attempt_posts_comment_with_max_of_max`: Verifies final attempt posts ({max_attempts}/{max_attempts}) format
+   - `test_comment_posted_to_feature_ticket_not_task`: Verifies comment posted to feature ticket, not task tickets
+
+2. **Attempt counts verification**
+   - `test_multiple_attempts_show_incrementing_counts`: Verifies multiple attempts show incrementing counts (1/3, 2/3, 3/3)
+   - `test_different_max_attempts_values`: Verifies correct counts with different max_attempts values (e.g., 5)
+
+3. **Edge Cases**
+   - `test_missing_current_attempt_logs_error_skips_comment`: Verifies missing current_attempt logs error and skips comment posting
+   - `test_missing_max_attempts_logs_error_skips_comment`: Verifies missing max_attempts logs error and skips comment posting
+   - `test_workflow_continues_when_both_values_missing`: Verifies workflow continues when both values are missing
+
+4. **Error Handling**
+   - `test_workflow_continues_when_comment_posting_fails`: Verifies workflow continues when status comment posting fails
+   - `test_jira_client_closed_even_on_comment_error`: Verifies JiraClient closed even when comment posting fails
+   - `test_no_comment_posted_when_no_failed_checks`: Verifies no comment posted when ci_failed_checks is empty
+
+**Running the tests**:
+```bash
+uv run pytest tests/integration/orchestrator/test_ci_fix_attempt_status_comments.py -v
+```
+
+**Mock Strategy**:
+- JiraClient is mocked to avoid external API calls
+- ContainerRunner is mocked to avoid container execution
+- GitHubClient is mocked to avoid external API calls
+- Tests verify exact comment text matches specification
+- Tests verify workflow continues despite Jira failures (error suppression)
+
 ### test_workflow_execution.py
 
 Integration tests for LangGraph workflow execution.
@@ -144,4 +223,19 @@ These integration tests require:
 - [x] 5+ pass scenario posts all fix comments with correct incrementing numbers
 - [x] Pass number resets between features
 - [x] Pass number persists across iterations within same feature
+- [x] Workflow continues when comment posting fails
+
+### PR Creation Status Comments
+- [x] TS-006: PR creation posts comment with PR number and updates labels
+- [x] TS-014: Comment uses fallback text when PR number unavailable
+- [x] Label transitions work correctly (remove forge:implementing, add forge:ci-pending)
+- [x] Workflow continues when comment posting fails
+- [x] CI fix re-entry does not post duplicate comments
+
+### CI Fix Attempt Status Comments
+- [x] TS-007: CI fix attempts post comments with correct counts (1/3, 2/3, 3/3)
+- [x] First attempt shows "1/{max_attempts}" format
+- [x] Final attempt shows "{max_attempts}/{max_attempts}" format
+- [x] Comment posted to feature ticket (not task tickets)
+- [x] Missing attempt values log error and skip comment
 - [x] Workflow continues when comment posting fails
