@@ -1,5 +1,6 @@
 """Shared test fixtures for Forge test suite."""
 
+import os
 from typing import AsyncGenerator, Generator
 from unittest.mock import AsyncMock, MagicMock
 
@@ -160,3 +161,37 @@ def sample_github_webhook_payload() -> dict:
         },
         "repository": {"full_name": "org/repo"},
     }
+
+
+def ai_review_node_available() -> bool:
+    """Check if ai_review node is available in the workflow.
+
+    This function checks:
+    1. If the ai_review module can be imported
+    2. If ai_review is exported from forge.workflow.nodes
+    3. If FORGE_ENABLE_AI_REVIEW_TESTS env var is set (for force-enable during development)
+
+    Returns:
+        bool: True if ai_review node is available, False otherwise.
+    """
+    # Check force-enable flag first
+    if os.environ.get("FORGE_ENABLE_AI_REVIEW_TESTS", "").lower() in ("1", "true", "yes"):
+        return True
+
+    try:
+        # Check if ai_review can be imported from workflow nodes
+        from forge.workflow.nodes import ai_review
+
+        # If import succeeds, the node is available
+        return ai_review is not None
+    except (ImportError, AttributeError):
+        # Node not yet implemented or not exported
+        return False
+
+
+# Pytest skip marker for ai_review tests
+# Use this to conditionally skip tests when ai_review node is not available
+skip_if_ai_review_unavailable = pytest.mark.skipif(
+    not ai_review_node_available(),
+    reason="ai_review node not yet implemented - tests will run when node is available",
+)
