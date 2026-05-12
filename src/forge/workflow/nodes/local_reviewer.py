@@ -4,10 +4,12 @@ import logging
 from pathlib import Path
 
 from forge.config import get_settings
+from forge.integrations.jira import JiraClient
 from forge.prompts import load_prompt
 from forge.sandbox import ContainerRunner
 from forge.workflow.feature.state import FeatureState as WorkflowState
 from forge.workflow.utils import update_state_timestamp
+from forge.workflow.utils.jira_status import post_status_comment
 from forge.workspace.git_ops import GitOperations
 from forge.workspace.manager import Workspace
 
@@ -37,6 +39,19 @@ async def local_review_changes(state: WorkflowState) -> WorkflowState:
     if not workspace_path:
         logger.info(f"No workspace for local review on {ticket_key}, skipping")
         return update_state_timestamp({**state, "current_node": "create_pr"})
+
+    # Post initial status comment only on first pass
+    if pass_number == 1:
+        settings = get_settings()
+        jira = JiraClient(settings)
+        try:
+            await post_status_comment(
+                jira,
+                ticket_key,
+                "🔍 Running local code review on changes before creating PR.",
+            )
+        finally:
+            await jira.close()
 
     if review_attempts >= MAX_REVIEW_ATTEMPTS:
         logger.warning(
