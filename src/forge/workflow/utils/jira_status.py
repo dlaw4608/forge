@@ -96,3 +96,56 @@ async def set_implementing_label(
         logger.warning(
             f"Failed to set implementing label on {feature_key}: {e}"
         )
+
+
+async def remove_implementing_label(
+    jira_client: JiraClient,
+    feature_key: str,
+) -> None:
+    """Remove the forge:implementing label from a feature issue.
+
+    This function suppresses all exceptions to prevent Jira API failures from
+    blocking workflow execution. Errors are logged at WARNING level.
+
+    Args:
+        jira_client: JiraClient instance for API calls.
+        feature_key: The Jira feature/epic key to remove label from.
+
+    Returns:
+        None. Exceptions are suppressed and logged.
+    """
+    try:
+        await jira_client.remove_labels(feature_key, [ForgeLabel.TASK_IMPLEMENTING.value])
+        logger.info(f"Removed forge:implementing label from {feature_key}")
+    except Exception as e:
+        logger.warning(
+            f"Failed to remove implementing label from {feature_key}: {e}"
+        )
+
+
+async def set_ci_pending_label(
+    jira_client: JiraClient,
+    feature_key: str,
+) -> None:
+    """Set the forge:ci-pending label on a feature issue.
+
+    This function suppresses all exceptions to prevent Jira API failures from
+    blocking workflow execution. Errors are logged at WARNING level.
+
+    Args:
+        jira_client: JiraClient instance for API calls.
+        feature_key: The Jira feature/epic key to label.
+
+    Returns:
+        None. Exceptions are suppressed and logged.
+    """
+    try:
+        await jira_client.set_workflow_label(
+            feature_key,
+            ForgeLabel.TASK_CI_PENDING,
+        )
+        logger.info(f"Set forge:ci-pending label on {feature_key}")
+    except Exception as e:
+        logger.warning(
+            f"Failed to set ci-pending label on {feature_key}: {e}"
+        )

@@ -424,22 +424,55 @@ async def wait_for_ci_gate(state: WorkflowState) -> WorkflowState:
     point ci_evaluator re-checks the actual CI results without any
     polling delay.
 
+    On initial entry (after PR creation), posts a status comment to the feature
+    ticket and transitions labels from forge:implementing to forge:ci-pending.
+
     Args:
         state: Current workflow state.
 
     Returns:
         Updated state with is_paused=True.
     """
+    from forge.integrations.jira.client import JiraClient
+    from forge.workflow.utils.jira_status import (
+        post_status_comment,
+        remove_implementing_label,
+        set_ci_pending_label,
+    )
+
     ticket_key = state["ticket_key"]
     ci_fix_attempts = state.get("ci_fix_attempts", 0)
 
-    if ci_fix_attempts > 0:
+    # Detect initial entry (after PR creation) vs re-entry (after CI fix)
+    is_initial_entry = ci_fix_attempts == 0
+
+    if is_initial_entry:
+        # Post status comment and update labels on initial entry
+        jira = JiraClient()
+        try:
+            # Build status message with PR number if available
+            pr_number = state.get("current_pr_number")
+            if pr_number is not None:
+                message = f"🚀 Pull request #{pr_number} created and submitted. Waiting for CI checks to complete."
+            else:
+                message = "🚀 Pull request created and submitted. Waiting for CI checks to complete."
+
+            # Post status comment to feature ticket
+            await post_status_comment(jira, ticket_key, message)
+
+            # Transition labels: remove forge:implementing, add forge:ci-pending
+            await remove_implementing_label(jira, ticket_key)
+            await set_ci_pending_label(jira, ticket_key)
+
+        finally:
+            await jira.close()
+
+        logger.info(f"Pausing {ticket_key} after PR creation, waiting for GitHub CI webhook")
+    else:
         logger.info(
             f"Pausing {ticket_key} after CI fix attempt {ci_fix_attempts}, "
             "waiting for GitHub CI webhook"
         )
-    else:
-        logger.info(f"Pausing {ticket_key} after PR creation, waiting for GitHub CI webhook")
 
     return update_state_timestamp(
         {
