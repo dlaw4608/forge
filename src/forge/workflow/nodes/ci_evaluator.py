@@ -147,7 +147,7 @@ async def evaluate_ci_status(state: WorkflowState) -> WorkflowState:
                 {
                     **state,
                     "ci_status": "passed",
-                    "current_node": "human_review_gate",
+                    "current_node": "ai_review",  # Route to AI review after CI passes
                     "last_error": None,
                     "current_attempt": 0,  # Reset attempt counter on success
                 }

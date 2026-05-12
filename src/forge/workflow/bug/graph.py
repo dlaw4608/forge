@@ -10,6 +10,7 @@ from langgraph.graph import END, StateGraph
 
 from forge.workflow.bug.state import BugState
 from forge.workflow.nodes import (
+    ai_review,
     analyze_bug,
     attempt_ci_fix,
     create_pull_request,
@@ -71,10 +72,12 @@ def route_entry(state: BugState) -> str:
         # CI stage
         elif current_node in ("ci_evaluator", "attempt_ci_fix", "wait_for_ci_gate"):
             return "ci_evaluator"
-        # Review stage — ai_review was removed; old checkpoints resume at human_review_gate
+        # Review stage
         elif current_node == "local_review":
             return "local_review"
-        elif current_node in ("ai_review", "human_review_gate"):
+        elif current_node == "ai_review":
+            return "ai_review"
+        elif current_node == "human_review_gate":
             return "human_review_gate"
         elif current_node == "implement_review":
             return "implement_review"
@@ -167,12 +170,12 @@ def _route_after_teardown(_state: BugState) -> Literal["ci_evaluator"]:
 
 def _route_ci_evaluation(
     state: BugState,
-) -> Literal["human_review_gate", "attempt_ci_fix", "escalate_blocked", "__end__"]:
+) -> Literal["ai_review", "attempt_ci_fix", "escalate_blocked", "__end__"]:
     """Route based on CI evaluation results."""
     ci_status = state.get("ci_status", "")
 
     routes = {
-        "passed": "human_review_gate",
+        "passed": "ai_review",  # Route to AI review after CI passes
         "fixing": "attempt_ci_fix",
         "pending": "__end__",  # Pause workflow until CI webhook
     }
@@ -229,6 +232,9 @@ def build_bug_graph() -> StateGraph:
     graph.add_node("attempt_ci_fix", attempt_ci_fix)
     graph.add_node("escalate_blocked", escalate_to_blocked)
 
+    # AI Review node (runs after CI passes, before human review)
+    graph.add_node("ai_review", ai_review)
+
     # Review nodes
     graph.add_node("human_review_gate", human_review_gate)
     graph.add_node("implement_review", implement_review)
@@ -253,6 +259,7 @@ def build_bug_graph() -> StateGraph:
             "create_pr": "create_pr",
             "teardown_workspace": "teardown_workspace",
             "ci_evaluator": "ci_evaluator",
+            "ai_review": "ai_review",
             "human_review_gate": "human_review_gate",
             "implement_review": "implement_review",
             "review_response_gate": "review_response_gate",
@@ -318,7 +325,7 @@ def build_bug_graph() -> StateGraph:
         "ci_evaluator",
         _route_ci_evaluation,
         {
-            "human_review_gate": "human_review_gate",
+            "ai_review": "ai_review",  # CI passed, run AI review
             "attempt_ci_fix": "attempt_ci_fix",
             "escalate_blocked": "escalate_blocked",
             END: END,  # Pause workflow until CI webhook
@@ -326,6 +333,9 @@ def build_bug_graph() -> StateGraph:
     )
     graph.add_edge("attempt_ci_fix", "ci_evaluator")
     graph.add_edge("escalate_blocked", END)
+    
+    # AI Review flow - runs after CI passes, routes to human review
+    graph.add_edge("ai_review", "human_review_gate")
 
     # Review flow
     graph.add_conditional_edges(

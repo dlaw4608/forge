@@ -59,6 +59,7 @@ from forge.workflow.nodes.workspace_setup import (
     setup_workspace,
     teardown_workspace,
 )
+from forge.workflow.nodes.ai_reviewer import ai_review
 
 __all__ = [
     # PRD generation
@@ -98,6 +99,8 @@ __all__ = [
     "wait_for_ci_gate",
     # Local code review
     "local_review_changes",
+    # AI code review
+    "ai_review",
     # Human review
     "aggregate_epic_status",
     "aggregate_feature_status",

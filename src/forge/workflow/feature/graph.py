@@ -22,6 +22,7 @@ from forge.workflow.gates import (
 from forge.workflow.nodes import (
     aggregate_epic_status,
     aggregate_feature_status,
+    ai_review,
     attempt_ci_fix,
     complete_tasks,
     create_pull_request,
@@ -106,6 +107,8 @@ def route_by_ticket_type(state: FeatureState) -> str:
         # CI/review stages that wait for external events - resume directly
         elif current_node in ("ci_evaluator", "attempt_ci_fix"):
             return "ci_evaluator"
+        elif current_node == "ai_review":
+            return "ai_review"
         elif current_node == "human_review_gate":
             return "human_review_gate"
         elif current_node == "implement_review":
@@ -290,12 +293,12 @@ def _route_after_teardown(state: FeatureState) -> Literal["setup_workspace", "wa
 
 def _route_ci_evaluation(
     state: FeatureState,
-) -> Literal["human_review_gate", "attempt_ci_fix", "escalate_blocked", "__end__"]:
+) -> Literal["ai_review", "attempt_ci_fix", "escalate_blocked", "__end__"]:
     """Route based on CI evaluation results."""
     ci_status = state.get("ci_status", "")
 
     routes = {
-        "passed": "human_review_gate",
+        "passed": "ai_review",  # Route to AI review after CI passes
         "fixing": "attempt_ci_fix",
         "pending": "__end__",  # Pause workflow until CI webhook
     }
@@ -392,6 +395,9 @@ def build_feature_graph() -> StateGraph:
     graph.add_node("attempt_ci_fix", attempt_ci_fix)
     graph.add_node("escalate_blocked", escalate_to_blocked)
 
+    # AI Review node (runs after CI passes, before human review)
+    graph.add_node("ai_review", ai_review)
+
     # Human Review nodes (US9)
     graph.add_node("human_review_gate", human_review_gate)
     graph.add_node("implement_review", implement_review)
@@ -427,6 +433,7 @@ def build_feature_graph() -> StateGraph:
             "local_review": "local_review",
             "wait_for_ci_gate": "wait_for_ci_gate",
             "ci_evaluator": "ci_evaluator",
+            "ai_review": "ai_review",
             "human_review_gate": "human_review_gate",
             "implement_review": "implement_review",
             "review_response_gate": "review_response_gate",
@@ -578,12 +585,15 @@ def build_feature_graph() -> StateGraph:
         "ci_evaluator",
         _route_ci_evaluation,
         {
-            "human_review_gate": "human_review_gate",
+            "ai_review": "ai_review",  # CI passed, run AI review
             "attempt_ci_fix": "attempt_ci_fix",
             "escalate_blocked": "escalate_blocked",
             END: END,  # Pause: CI still running, wait for next webhook
         },
     )
+    
+    # AI Review flow - runs after CI passes, routes to human review
+    graph.add_edge("ai_review", "human_review_gate")
     graph.add_conditional_edges(
         "attempt_ci_fix",
         lambda s: s.get("current_node", "wait_for_ci_gate"),
